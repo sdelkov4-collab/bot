@@ -1,4 +1,4 @@
-import os, re, time, json, requests, yaml
+import os, re, time, json, requests, yaml, random
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -22,20 +22,10 @@ def rub_str_to_float(s):
         return None
     return float(m.group(1).replace(",", "."))
 
-def get_priceoverview(market_hash_name: str, currency: int) -> dict:
-    resp = requests.get(
-        PRICE_URL,
-        params={"appid": STEAM_APPID, "market_hash_name": market_hash_name, "currency": currency},
-        timeout=20,
-        headers={"User-Agent": "Mozilla/5.0 (compatible; CS2-Monitor/3.1)"}
-    )
-    resp.raise_for_status()
-    return resp.json()
-
 def send_telegram(msg: str):
     """Короткие сообщения (резюме/фолбэк)."""
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    r = requests.post(url, json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML", "disable_web_page_preview": True}, timeout=30)
+    r = requests.post(url, json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML", "disable_web_page_preview": True}, timeout=60)
     try:
         ok = r.json().get("ok")
     except Exception:
@@ -52,7 +42,7 @@ def send_document(text: str, filename: str, caption: str = ""):
     if caption:
         data["caption"] = caption
         data["parse_mode"] = "HTML"
-    r = requests.post(url, data=data, files=files, timeout=60)
+    r = requests.post(url, data=data, files=files, timeout=120)
     try:
         ok = r.json().get("ok")
     except Exception:
@@ -75,9 +65,7 @@ def save_state(state):
     STATE_FILE.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
 def estimate_new_sales(prev_sales24h, curr_sales24h, dt_minutes):
-    """Оценка «сколько продано за интервал» из rolling 24h.
-    Приблизительная модель: из окна 'ушло' prev*(dt/1440), 'пришло' остальное.
-    """
+    """Оценка «сколько продано за интервал» из rolling 24h (грубая модель)."""
     if prev_sales24h is None or curr_sales24h is None or dt_minutes is None:
         return None
     try:
@@ -125,6 +113,71 @@ def build_market_names(cfg):
 
     return items
 
+# ── Троттлинг и ретраи ────────────────────────────────────────────────────────
+class Throttler:
+    def __init__(self, base_delay=2.2, jitter=0.4):
+        self.base_delay = float(base_delay)
+        self.jitter = float(jitter)
+        self._last = 0.0  # monotonic
+
+    def wait_slot(self):
+        now = time.monotonic()
+        elapsed = now - self._last
+        need = self.base_delay - elapsed
+        if need > 0:
+            time.sleep(need)
+        if self.jitter > 0:
+            time.sleep(random.uniform(0, self.jitter))
+        self._last = time.monotonic()
+
+def fetch_priceoverview(name, currency, throttler: Throttler, retries=5, backoff=1.8):
+    """GET с выдержкой пауз, ретраями на 429/5xx и уважением Retry-After."""
+    attempt = 0
+    while True:
+        throttler.wait_slot()
+        try:
+            resp = requests.get(
+                PRICE_URL,
+                params={"appid": STEAM_APPID, "market_hash_name": name, "currency": currency},
+                timeout=30,
+                headers={"User-Agent": "Mozilla/5.0 (compatible; CS2-Monitor/3.2)"}
+            )
+            if resp.status_code == 429:
+                ra = resp.headers.get("Retry-After")
+                sleep_for = float(ra) + 0.5 if ra and ra.isdigit() else ((backoff ** attempt) * 2.5)
+                sleep_for = min(max(sleep_for, 2.0), 30.0)
+                time.sleep(sleep_for)
+                attempt += 1
+                if attempt > retries:
+                    raise requests.HTTPError(f"429 after {retries} retries")
+                continue
+
+            if resp.status_code >= 500:
+                time.sleep(min((backoff ** attempt) * 2.0, 20.0))
+                attempt += 1
+                if attempt > retries:
+                    resp.raise_for_status()
+                continue
+
+            resp.raise_for_status()
+            return resp.json()
+
+        except requests.HTTPError as e:
+            if getattr(e, "response", None) and e.response is not None:
+                code = e.response.status_code
+                if code in (502, 503, 504):
+                    time.sleep(min((backoff ** attempt) * 2.0, 20.0))
+                    attempt += 1
+                    if attempt > retries:
+                        raise
+                    continue
+            raise
+        except requests.RequestException:
+            time.sleep(min((backoff ** attempt) * 2.0, 20.0))
+            attempt += 1
+            if attempt > retries:
+                raise
+
 # ── Основной скрипт ───────────────────────────────────────────────────────────
 def main():
     cfg = yaml.safe_load(open("config.yaml", "r", encoding="utf-8"))
@@ -133,17 +186,31 @@ def main():
     change_thr = float(cfg.get("change_percent_threshold", 10))
     cooldown_hours = float(cfg.get("cooldown_hours", 6))
 
+    req_cfg = cfg.get("request", {}) or {}
+    base_delay = float(req_cfg.get("base_delay_sec", 2.2))
+    jitter = float(req_cfg.get("jitter_sec", 0.4))
+    retries = int(req_cfg.get("retries", 5))
+    backoff = float(req_cfg.get("backoff_factor", 1.8))
+    shuffle_items = bool(req_cfg.get("shuffle", True))
+
+    throttler = Throttler(base_delay=base_delay, jitter=jitter)
+
     items = build_market_names(cfg)
+    if shuffle_items:
+        rnd = random.Random()
+        rnd.shuffle(items)
+
     state = load_state()
     now = datetime.now(timezone.utc)
     now_iso = now.replace(microsecond=0).isoformat()
 
-    # Для полного отчёта
+    # Полный отчёт
     report_lines = []
-    report_lines.append(f"Austin 2025 monitor | threshold ≥{int(change_thr)}% | {now.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    report_lines.append(f"Монитор Austin 2025 | порог ≥{int(change_thr)}% | {now.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    report_lines.append(f"позиций проверено: {len(items)} | мин. продажи/24ч: {min_sales} | задержка≈{base_delay}s±{jitter}s | повторы={retries}")
     report_lines.append("")
 
-    # Для короткого резюме
+    # Для резюме
     changed_entries = []  # (abs_change, text_for_report, short_label)
     buy_list, sell_list = [], []
     notes = []
@@ -152,7 +219,7 @@ def main():
         key = it["key"]
         name = it["name"]
         try:
-            d = get_priceoverview(name, ccy)
+            d = fetch_priceoverview(name, ccy, throttler=throttler, retries=retries, backoff=backoff)
             if not d.get("success"):
                 notes.append(f"[WARN] {name}: success=false")
                 continue
@@ -163,7 +230,6 @@ def main():
             m = re.findall(r"\d+", volume_str)
             sales24h = int(m[0]) if m else 0
 
-            # Слишком «тихие» пропускаем (настраивается в config)
             if sales24h < min_sales:
                 continue
 
@@ -186,7 +252,7 @@ def main():
             if last_median and median:
                 change_pct = ((median - last_median) / last_median) * 100.0
 
-            # Обновляем state (сохраняем точку независимо от алерта)
+            # Обновляем state
             rec["last"] = {"median": median, "ask": ask, "sales24h": sales24h, "ts": now_iso}
             hist = rec.get("history", [])
             hist.append({"ts": now_iso, "median": median, "sales24h": sales24h})
@@ -194,15 +260,16 @@ def main():
             rec["history"] = [p for p in hist if datetime.fromisoformat(p["ts"].replace("Z", "+00:00")) >= cutoff]
             state[key] = rec
 
-            # Добавляем в полный отчёт «сырые» строки
-            line = f"{name}\n  median: {('%.2f ₽' % median) if median else '—'} | ask: {('%.2f ₽' % ask) if ask else '—'} | sales24h: {sales24h}"
+            # Строка в отчёт (РУССКИЕ МЕТКИ + ПУСТАЯ СТРОКА ПОСЛЕ)
+            line = f"{name}\n  медиана: {('%.2f ₽' % median) if median else '—'} | мин. листинг: {('%.2f ₽' % ask) if ask else '—'} | продажи24ч: {sales24h}"
             if last_median:
-                line += f" | prev_median: {('%.2f ₽' % last_median)}"
+                line += f" | было (медиана): {('%.2f ₽' % last_median)}"
             if sold_since is not None:
-                line += f" | sold_since: {sold_since} (estimate)"
+                line += f" | продано с прошлого запуска: {sold_since} (оценка)"
             report_lines.append(line)
+            report_lines.append("")  # ← пустая строка после каждого предмета
 
-            # Условие изменения ±threshold + cooldown
+            # Изменение ±threshold + cooldown
             if change_pct is not None and abs(change_pct) >= change_thr:
                 in_cd = False
                 la = rec.get("last_alert_ts")
@@ -212,25 +279,19 @@ def main():
                     except Exception:
                         in_cd = False
                 if not in_cd:
-                    sign = "UP" if change_pct > 0 else "DOWN"
-                    # подробный блок для отчёта
+                    sign = "ВЫРОС" if change_pct > 0 else "УПАЛ"
                     block = [
                         f"[{sign} {change_pct:+.1f}%] {name}",
-                        f"  was: {last_median:.2f} ₽ → now: {median:.2f} ₽",
-                        f"  sold_since_last: {sold_since if sold_since is not None else '—'} | sales24h: {sales24h}"
+                        f"  было: {last_median:.2f} ₽ → стало: {median:.2f} ₽",
+                        f"  продано с прошлого запуска: {sold_since if sold_since is not None else '—'} | продажи24ч: {sales24h}"
                     ]
                     changed_entries.append( (abs(change_pct), "\n".join(block), f"{name} ({change_pct:+.1f}%)") )
-
-                    # рекомендации
                     if change_pct <= -change_thr:
                         buy_list.append(f"{name} ({change_pct:+.1f}%)")
                     elif change_pct >= change_thr:
                         sell_list.append(f"{name} ({change_pct:+.1f}%)")
-
                     rec["last_alert_ts"] = now_iso
                     state[key] = rec
-
-            time.sleep(0.8)  # щадим rate-limit
 
         except Exception as e:
             notes.append(f"[ERROR] {name}: {e}")
@@ -238,28 +299,27 @@ def main():
     # Сохраняем состояние
     save_state(state)
 
-    # Собираем полный отчёт (текстовый файл)
-    report_lines.insert(1, f"items checked: {len(items)} | min_daily_sales: {min_sales}")
-    report_lines.append("")
+    # Собираем полный отчёт
+    report_lines.append("—" * 40)
     if changed_entries:
-        report_lines.append("=== CHANGES >= threshold ===")
+        report_lines.append("ИЗМЕНЕНИЯ ≥ порога:")
         changed_entries.sort(key=lambda x: x[0], reverse=True)
         for _, txt, _short in changed_entries:
             report_lines.append(txt)
-        report_lines.append("")
+            report_lines.append("")  # пустая строка между блоками изменений
     else:
-        report_lines.append("No changes >= threshold in this interval.")
-        report_lines.append("")
+        report_lines.append("Нет изменений ≥ порога за текущий интервал.")
+    report_lines.append("")
 
     if notes:
-        report_lines.append("=== NOTES ===")
+        report_lines.append("ЗАМЕТКИ:")
         report_lines.extend(notes)
         report_lines.append("")
 
     report_lines.append(f"as_of: {now.strftime('%Y-%m-%d %H:%M:%S UTC')}")
     full_report = "\n".join(report_lines)
 
-    # Сохраним файл локально (полезно для upload-artifact шага, если включишь)
+    # Сохраняем .txt (удобно для артефакта)
     fname = f"cs2_austin_report_{now.strftime('%Y%m%d_%H%M%S')}Z.txt"
     try:
         with open(fname, "w", encoding="utf-8") as f:
@@ -267,31 +327,23 @@ def main():
     except Exception as e:
         print("Cannot write report file:", e)
 
-    # Короткое резюме (влезает в лимит Телеги)
+    # Короткое резюме
     header = f"📊 Austin 2025 — изменения ≥{int(change_thr)}%"
     ts = now.strftime("%Y-%m-%d %H:%M:%S UTC")
     summary = [header,
                f"Изменений за интервал: <b>{len(changed_entries)}</b>",
                f"К покупке: <b>{len(buy_list)}</b>",
-               f"К продаже: <b>{len(sell_list)}</b>"]
-    if buy_list:
-        summary.append("\n<b>Топ к покупке</b>:\n• " + "\n• ".join(buy_list[:5]))
-    if sell_list:
-        summary.append("\n<b>Топ к продаже</b>:\n• " + "\n• ".join(sell_list[:5]))
-    summary.append(f"\n<i>{ts}</i>")
-    summary_msg = "\n".join(summary)
+               f"К продаже: <b>{len(sell_list)}</b>",
+               f"<i>{ts}</i>"]
+    send_telegram("\n".join(summary))
 
-    # 1) Резюме коротким сообщением
-    send_telegram(summary_msg)
-
-    # 2) Полный отчёт файлом
+    # Полный отчёт файлом
     ok = send_document(full_report, filename=fname, caption="Полный отчёт (txt)")
     if not ok:
-        # Фолбэк: если вдруг документ не ушёл — отправим текстом кусками в <code>
+        # Фолбэк: отправим кусками в <code>
         limit = 3500
         for i in range(0, len(full_report), limit):
-            chunk = full_report[i:i+limit]
-            send_telegram("<code>" + chunk + "</code>")
+            send_telegram("<code>" + full_report[i:i+limit] + "</code>")
 
 if __name__ == "__main__":
     main()
