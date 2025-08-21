@@ -2,7 +2,7 @@ name: CS2 Monitor v3 (Austin 2025)
 
 on:
   schedule:
-    - cron: "*/30 * * * *"   # каждые 30 минут
+    - cron: "*/60 * * * *"   # каждые 60 минут
   workflow_dispatch: {}
 
 jobs:
