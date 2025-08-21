@@ -1,16 +1,31 @@
-# 1) Обновитесь (чтобы не было конфликтов)
-git switch main            # или: git checkout main
-git pull --rebase origin main
+name: CS2 Monitor v3 (Austin 2025)
 
-# 2a) Удалить файл из репозитория и локально
-git rm path/to/file.ext
+on:
+  schedule:
+    - cron: "*/30 * * * *"   # каждые 30 минут
+  workflow_dispatch: {}
 
-# 2b) Удалить из репозитория, но оставить файл локально
-git rm --cached path/to/file.ext
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
-# 2c) Удалить папку целиком
-git rm -r path/to/folder/
+      - name: Restore state cache
+        uses: actions/cache@v4
+        with:
+          path: .state
+          key: cs2-monitor-state-${{ github.run_id }}
+          restore-keys: |
+            cs2-monitor-state-
 
-# 3) Зафиксировать и отправить
-git commit -m "Remove unnecessary files"
-git push origin main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+
+      - name: Run monitor
+        run: python monitor.py
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:  ${{ secrets.TELEGRAM_CHAT_ID }}
