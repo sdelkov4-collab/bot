@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   run:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     steps:
       - name: Heartbeat
         run: echo "Schedule fired at $(date -u) | ref=$GITHUB_REF | attempt=$GITHUB_RUN_ATTEMPT"
