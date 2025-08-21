@@ -28,3 +28,12 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:  ${{ secrets.TELEGRAM_CHAT_ID }}
+
+      - name: Save report artifact (optional)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cs2-report-${{ github.run_number }}
+          path: |
+            cs2_austin_report_*.txt
+          if-no-files-found: ignore
