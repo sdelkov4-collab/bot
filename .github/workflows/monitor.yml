@@ -1,0 +1,16 @@
+# 1) Обновитесь (чтобы не было конфликтов)
+git switch main            # или: git checkout main
+git pull --rebase origin main
+
+# 2a) Удалить файл из репозитория и локально
+git rm path/to/file.ext
+
+# 2b) Удалить из репозитория, но оставить файл локально
+git rm --cached path/to/file.ext
+
+# 2c) Удалить папку целиком
+git rm -r path/to/folder/
+
+# 3) Зафиксировать и отправить
+git commit -m "Remove unnecessary files"
+git push origin main
