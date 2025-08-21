@@ -1,0 +1,53 @@
+currency_code: 5          # 5 = RUB
+steam_fee_pct: 15
+min_daily_sales: 100
+
+thresholds:
+  short_roi_net_min_pct: 60    # краткосрок
+  long_roi_net_min_pct: 110    # долгосрок
+
+# NEW: пороги для алертов
+alerts:
+  price_new_high_days: [7, 30]      # окна для новых максимумов median_price
+  volume_spike:
+    lookback_days: 7                # окно среднего по объёму продаж (sales24h)
+    factor: 2.0                     # спайк, если текущий >= factor * среднее за окно
+  cooldown_hours: 12                # анти-спам: минимум часов между одинаковыми типами алерта на один предмет
+
+# Примеры: наклейки мейджоров последних 5 лет (проверьте точность market_hash_name)
+items:
+  - name: "Sticker | Natus Vincere (Holo) | Stockholm 2021"
+    market_hash_name: "Sticker | Natus Vincere (Holo) | Stockholm 2021"
+    entry_limit_rub: 150.0
+
+  - name: "Sticker | s1mple (Gold) | Stockholm 2021"
+    market_hash_name: "Sticker | s1mple (Gold) | Stockholm 2021"
+    entry_limit_rub: 2000.0
+
+  - name: "Sticker | FaZe Clan (Holo) | Antwerp 2022"
+    market_hash_name: "Sticker | FaZe Clan (Holo) | Antwerp 2022"
+    entry_limit_rub: 160.0
+
+  - name: "Sticker | s1mple (Gold) | Antwerp 2022"
+    market_hash_name: "Sticker | s1mple (Gold) | Antwerp 2022"
+    entry_limit_rub: 2200.0
+
+  - name: "Sticker | Imperial Esports (Holo) | Rio 2022"
+    market_hash_name: "Sticker | Imperial Esports (Holo) | Rio 2022"
+    entry_limit_rub: 120.0
+
+  - name: "Sticker | Vitality (Holo) | Paris 2023"
+    market_hash_name: "Sticker | Vitality (Holo) | Paris 2023"
+    entry_limit_rub: 140.0
+
+  - name: "Sticker | ZywOo (Gold) | Paris 2023"
+    market_hash_name: "Sticker | ZywOo (Gold) | Paris 2023"
+    entry_limit_rub: 2800.0
+
+  - name: "Sticker | Team Spirit (Holo) | Copenhagen 2024"
+    market_hash_name: "Sticker | Team Spirit (Holo) | Copenhagen 2024"
+    entry_limit_rub: 170.0
+
+  - name: "Sticker | donk (Gold) | Copenhagen 2024"
+    market_hash_name: "Sticker | donk (Gold) | Copenhagen 2024"
+    entry_limit_rub: 3500.0
