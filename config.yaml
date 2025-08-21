@@ -1,6 +1,6 @@
 currency_code: 5          # 5 = RUB
 steam_fee_pct: 15
-min_daily_sales: 100
+min_daily_sales: 1
 
 thresholds:
   short_roi_net_min_pct: 60    # краткосрок
