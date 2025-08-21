@@ -2,23 +2,24 @@ name: CS2 Monitor v3 (Austin 2025)
 
 on:
   schedule:
-    - cron: "0 * * * *"   # каждый час, в минуту 00 по UTC
+    - cron: "0 * * * *"   # каждый час, в 00 минут по UTC
   workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cs2-monitor
+  cancel-in-progress: true
 
 jobs:
   run:
     runs-on: ubuntu-latest
     steps:
+      - name: Heartbeat
+        run: echo "Schedule fired at $(date -u) | ref=$GITHUB_REF | attempt=$GITHUB_RUN_ATTEMPT"
+
       - uses: actions/checkout@v4
-
-      - name: Restore state cache
-        uses: actions/cache@v4
-        with:
-          path: .state
-          key: cs2-monitor-state-${{ github.run_id }}
-          restore-keys: |
-            cs2-monitor-state-
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
