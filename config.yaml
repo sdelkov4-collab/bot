@@ -19,7 +19,7 @@ scope:
     variants: ["paper","holo","foil"]     # для команд
   players:
     include: ["m0NESY","donk","NiKo","Lucky","exit","zont1x","ropz","JamYoung","Jee","z4kr"]
-    variants: ["paper","holo","gold"]     # для игроков
+    variants: ["paper","holo","foil"]     # для игроков
 
 # Алиасы (на случай опечаток)
 aliases:
