@@ -1,0 +1,31 @@
+# Валюта и комиссия
+currency_code: 5       # 5 = RUB
+steam_fee_pct: 15
+
+# Фильтр по продажам за ~24ч (листинги недоступны бесплатно)
+min_daily_sales: 1
+
+# Порог для алерта изменения цены (медианы) между измерениями, % (в обе стороны)
+change_percent_threshold: 10
+
+# Анти-спам: не присылать повторный алерт по той же метке и предмету раньше, чем через N часов
+cooldown_hours: 6
+
+# Выбор события/наборов (исправил "Sprit" -> Team Spirit)
+scope:
+  event: "Austin 2025"
+  teams:
+    include: ["Team Spirit","Team Liquid","TYLOO","Lynn Vision","Aurora","MOUZ","Complexity","FlyQuest","OG","Falcons"]
+    variants: ["paper","holo","foil"]     # для команд
+  players:
+    include: ["m0NESY","donk","NiKo","Lucky","exit","zont1x","ropz","JamYoung","Jee","z4kr"]
+    variants: ["paper","holo","gold"]     # для игроков
+
+# Алиасы (на случай опечаток)
+aliases:
+  players:
+    monesy: "m0NESY"
+    niko: "NiKo"
+    zontix: "zont1x"
+    jamyoung: "JamYoung"
+    jee: "Jee"
