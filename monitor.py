@@ -383,20 +383,28 @@ def main():
     except Exception as e:
         print("Cannot write report file:", e)
 
-    # Короткое резюме (влезает в лимит Телеги)
+        # Короткое резюме
     header = "📊 Austin 2025 — сигналы"
     ts = now.strftime("%Y-%m-%d %H:%M:%S UTC")
-    lines = [header,
-             f"Цена (к 7д мед.): {len(price_signals)}",
-             f"Объёмные: {len(vol_signals)}",
-             f"Комбо: {len(combo_signals)}"]
+    lines = [
+        header,
+        f"Цена (к 7д мед.): {len(price_signals)}",
+        f"Объёмные: {len(vol_signals)}",
+        f"Комбо: {len(combo_signals)}",
+    ]
     if enable_change:
         lines.append(f"Δ за интервал: {len(changed_entries)}")
     lines.append(f"<i>{ts}</i>")
     send_telegram("\n".join(lines))
 
+    # Полный отчёт файлом
     ok = send_document(full_report, filename=fname, caption="Полный отчёт (txt)")
     if not ok:
-        # фолбэк: порубим на куски в <code>
+        # Фолбэк: порубим на куски и отправим в <code>
         limit = 3500
         for i in range(0, len(full_report), limit):
+            chunk = full_report[i:i + limit]
+            send_telegram("<code>" + chunk + "</code>")
+
+if __name__ == "__main__":
+    main()
