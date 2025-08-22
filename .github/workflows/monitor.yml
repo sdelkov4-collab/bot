@@ -1,39 +1,54 @@
-name: CS2 Monitor v3 (Austin 2025)
+name: CS2 Austin Monitor
 
 on:
   schedule:
-    - cron: "0 * * * *"        # каждый час, 00 минут по UTC
+    - cron: "7 * * * *"   # каждый час на :07 (меньше конкуренции)
+    - cron: "37 * * * *"  # резерв через ~30 минут
   workflow_dispatch: {}
+
+concurrency:
+  group: cs2-austin-monitor
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
-concurrency:
-  group: cs2-monitor
-  cancel-in-progress: true
-
 jobs:
-  run:
-    runs-on: ubuntu-22.04
+  run-monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
     steps:
-      - name: Heartbeat
-        run: echo "Schedule fired at $(date -u) | ref=$GITHUB_REF | attempt=$GITHUB_RUN_ATTEMPT"
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ВАЖНО: восстанавливаем .state, чтобы были "прошлые" значения ask/median
+      - name: Restore state cache
+        uses: actions/cache@v4
+        with:
+          path: .state
+          # уникальный ключ для сохранения нового состояния
+          key: cs2-austin-state-${{ github.run_id }}
+          # а сюда подхватится последний доступный кэш с таким префиксом
+          restore-keys: |
+            cs2-austin-state-
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install -r requirements.txt
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pyyaml
+
+      - name: Syntax check
+        run: python -m py_compile monitor.py
+
       - name: Run monitor
         run: python monitor.py
+        timeout-minutes: 20
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:  ${{ secrets.TELEGRAM_CHAT_ID }}
-
-      - name: Save report artifact (optional)
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: cs2-report-${{ github.run_number }}
-          path: |
-            cs2_austin_report_*.txt
-          if-no-files-found: ignore
