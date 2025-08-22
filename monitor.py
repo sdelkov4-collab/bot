@@ -381,6 +381,7 @@ def main():
             last_median = last.get("median") if last else None
             last_sales = last.get("sales24h") if last else None
             last_ts_iso = last.get("ts") if last else None
+            last_ask = last.get("ask") if last else None
 
             # прошло минут с прошлого замера
             dt_minutes = None
@@ -391,6 +392,13 @@ def main():
                     dt_minutes = None
 
             sold_since = estimate_new_sales(last_sales, sales24h, dt_minutes)
+# Δ минимального листинга (ask) к прошлому замеру
+ask_change_pct = None
+ask_change_abs = None
+if (ask is not None) and (last_ask is not None) and (last_ask > 0):
+    ask_change_pct = (ask / last_ask - 1.0) * 100.0
+    ask_change_abs = ask - last_ask
+
 
             # ── БАЗЫ ИЗ ПРОШЛОЙ ИСТОРИИ (до текущей точки)
             hist_before = rec.get("history", [])
@@ -419,6 +427,9 @@ def main():
                 line += f" | short≈ {short_base_med:.2f} ₽/{short_minutes}м"
             if sold_since is not None:
                 line += f" | продано с прошлого запуска: {sold_since} (оц.)"
+                if ask_change_pct is not None:
+    line += f" | Δ ask к прошл.: {ask_change_pct:+.1f}% ({ask_change_abs:+.2f} ₽)"
+
             report.append(line)
             report.append("")
 
