@@ -419,35 +419,21 @@ def main():
             report.append(line)
             report.append("")
 
-            # ───── ДОЛГИЕ СИГНАЛЫ к 7-дн базам ─────
-            severity = None
-            discount_pct = None
-            if (median is not None) and (base_median is not None) and len(hist_before) >= p_min_pts:
-                discount_pct = (1 - (median / base_median)) * 100.0
-                if median <= base_median * deep_pct:
-                    severity = "deep"
-                elif median <= base_median * soft_pct:
-                    severity = "soft"
-                if severity:
-                    price_signals.append((severity, name, median, base_median, discount_pct))
-
-            if (base_sales is not None) and (base_sales > 0) and len(hist_before) >= v_min_pts:
-                ratio = sales24h / base_sales
-                if ratio >= spike_mult:
-                    vol_signals.append((name, sales24h, base_sales, ratio))
-
+                       # ───── КОМБО (долгие цена+объём) ─────
             if severity and (base_sales is not None) and (base_sales > 0) and len(hist_before) >= max(p_min_pts, v_min_pts):
                 ratio = sales24h / base_sales
                 if ratio >= spike_mult:
                     last_alerts = rec.get("last_alerts", {})
                     last_combo_iso = last_alerts.get("combo")
+                    in_cd = False
+                    if last_combo_iso:
+                        try:
+                            in_cd = (now - datetime.fromisoformat(last_combo_iso.replace("Z", "+00:00"))) < timedelta(hours=combo_cd_h)
+                        except Exception:
                             in_cd = False
-        if last_combo_iso:
-            try:
-                in_cd = (now - datetime.fromisoformat(last_combo_iso.replace("Z", "+00:00"))) < timedelta(hours=combo_cd_h)
-            except Exception:
-                in_cd = False
-        if not in_cd:
-            combo_signals.append((name, f"цена {severity} (−{abs(discount_pct):.1f}%) + объём ×{ratio:.2f} к 7д"))
-            last_alerts["combo"] = now_iso
-            rec["last_alerts"] = last_alerts
+                    if not in_cd:
+                        combo_signals.append(
+                            (name, f"цена {severity} (−{abs(discount_pct):.1f}%) + объём ×{ratio:.2f} к 7д")
+                        )
+                        last_alerts["combo"] = now_iso
+                        rec["last_alerts"] = last_alerts
