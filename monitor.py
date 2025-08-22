@@ -126,3 +126,462 @@ def build_market_names(cfg):
 
     def player_name(base, variant):
         b = normalize_player(base)
+        if variant == "paper":
+            return f"Sticker | {b} | {ev}"
+        if variant == "holo":
+            return f"Sticker | {b} (Holo) | {ev}"
+        if variant == "gold":
+            return f"Sticker | {b} (Gold) | {ev}"
+        return None
+
+    for t in teams:
+        for v in team_vars:
+            n = team_name(t, v)
+            if n:
+                items.append({"name": n, "key": n})
+
+    for p in players:
+        for v in player_vars:
+            n = player_name(p, v)
+            if n:
+                items.append({"name": n, "key": n})
+
+    return items
+
+
+# ───────────────────── Троттлинг и ретраи запросов ────────────────────
+class Throttler:
+    def __init__(self, base_delay=2.5, jitter=0.5):
+        self.base_delay = float(base_delay)
+        self.jitter = float(jitter)
+        self._last = 0.0
+
+    def wait_slot(self):
+        now = time.monotonic()
+        need = self.base_delay - (now - self._last)
+        if need > 0:
+            time.sleep(need)
+        if self.jitter > 0:
+            time.sleep(random.uniform(0, self.jitter))
+        self._last = time.monotonic()
+
+
+def fetch_priceoverview(name, currency, throttler: Throttler, retries=5, backoff=1.8):
+    attempt = 0
+    while True:
+        throttler.wait_slot()
+        try:
+            resp = requests.get(
+                PRICE_URL,
+                params={"appid": STEAM_APPID, "market_hash_name": name, "currency": currency},
+                timeout=30,
+                headers={"User-Agent": "Mozilla/5.0 (compatible; CS2-Monitor/3.4)"},
+            )
+            if resp.status_code == 429:
+                ra = resp.headers.get("Retry-After")
+                sleep_for = float(ra) + 0.5 if ra and ra.isdigit() else ((backoff ** attempt) * 2.5)
+                time.sleep(max(2.0, min(sleep_for, 30.0)))
+                attempt += 1
+                if attempt > retries:
+                    raise requests.HTTPError("429 after retries")
+                continue
+
+            if resp.status_code >= 500:
+                time.sleep(min((backoff ** attempt) * 2.0, 20.0))
+                attempt += 1
+                if attempt > retries:
+                    resp.raise_for_status()
+                continue
+
+            resp.raise_for_status()
+            return resp.json()
+
+        except requests.HTTPError as e:
+            if getattr(e, "response", None) is not None and e.response.status_code in (502, 503, 504):
+                time.sleep(min((backoff ** attempt) * 2.0, 20.0))
+                attempt += 1
+                if attempt > retries:
+                    raise
+                continue
+            raise
+
+        except requests.RequestException:
+            time.sleep(min((backoff ** attempt) * 2.0, 20.0))
+            attempt += 1
+            if attempt > retries:
+                raise
+
+
+# ──────────────── Подготовка статистик из истории ────────────────────
+def window_values(rec_history, now_utc, days, key):
+    cutoff = now_utc - timedelta(days=days)
+    vals = []
+    for p in rec_history:
+        try:
+            ts = datetime.fromisoformat(p["ts"].replace("Z", "+00:00"))
+            if ts >= cutoff:
+                v = p.get(key)
+                if v is not None:
+                    vals.append(v)
+        except Exception:
+            continue
+    return vals
+
+
+def robust_median(vals):
+    vals = [v for v in vals if isinstance(v, (int, float))]
+    if not vals:
+        return None
+    try:
+        return statistics.median(vals)
+    except Exception:
+        return sum(vals) / len(vals)
+
+
+def robust_mean(vals):
+    vals = [v for v in vals if isinstance(v, (int, float))]
+    if not vals:
+        return None
+    return sum(vals) / len(vals)
+
+
+def short_window(rec_history, now_utc, minutes, key):
+    cutoff = now_utc - timedelta(minutes=minutes)
+    vals, ts_vals = [], []
+    for p in rec_history:
+        try:
+            ts = datetime.fromisoformat(p["ts"].replace("Z", "+00:00"))
+            if ts >= cutoff:
+                v = p.get(key)
+                if v is not None:
+                    vals.append(v)
+                    ts_vals.append(ts)
+        except Exception:
+            continue
+    return vals, ts_vals
+
+
+def baselines_from_history(rec, now_utc, min_points=12):
+    """7-дневные базовые уровни (или аккуратные фолбэки)."""
+    hist = rec.get("history", [])
+    m7 = window_values(hist, now_utc, 7, "median")
+    s7 = window_values(hist, now_utc, 7, "sales24h")
+    if len(m7) < min_points or len(s7) < min_points:
+        m3 = window_values(hist, now_utc, 3, "median")
+        s3 = window_values(hist, now_utc, 3, "sales24h")
+        if len(m3) >= max(6, min_points // 2) and len(s3) >= max(6, min_points // 2):
+            m_base = robust_median(m3)
+            s_base = robust_mean(s3)
+            used_days = 3
+        else:
+            all_m = [p.get("median") for p in hist if p.get("median") is not None]
+            all_s = [p.get("sales24h") for p in hist if p.get("sales24h") is not None]
+            m_base = robust_median(all_m)
+            s_base = robust_mean(all_s)
+            used_days = "all"
+    else:
+        m_base = robust_median(m7)
+        s_base = robust_mean(s7)
+        used_days = 7
+    return m_base, s_base, used_days, len(hist)
+
+
+# ────────────────────────────── Основной код ──────────────────────────
+def main():
+    cfg = yaml.safe_load(open("config.yaml", "r", encoding="utf-8"))
+
+    # База/флаги
+    ccy = int(cfg.get("currency_code", 5))
+    min_sales = int(cfg.get("min_daily_sales", 1))
+    change_thr = float(cfg.get("change_percent_threshold", 10))
+    enable_change = bool(cfg.get("enable_change_alerts", False))
+    cooldown_hours = float(cfg.get("cooldown_hours", 6))
+
+    # Сигналы (долгие)
+    sig_cfg = cfg.get("signals", {}) or {}
+    p_cfg = sig_cfg.get("price_from_7d_median", {}) or {}
+    v_cfg = sig_cfg.get("volume_spike", {}) or {}
+    combo_cd_h = float(sig_cfg.get("combo_cooldown_hours", 6))
+
+    soft_pct = float(p_cfg.get("soft_pct", 0.90))
+    deep_pct = float(p_cfg.get("deep_pct", 0.85))
+    p_min_pts = int(p_cfg.get("min_points", 12))
+
+    spike_mult = float(v_cfg.get("spike_multiplier", 1.5))
+    v_min_pts = int(v_cfg.get("min_points", 12))
+
+    # Пампы (короткое окно)
+    pump_cfg = sig_cfg.get("pump", {}) or {}
+    short_minutes = int(pump_cfg.get("short_window_minutes", 120))
+    pump_min_pts = int(pump_cfg.get("min_points", 4))
+    price_jump_pct = float(pump_cfg.get("price_jump_pct", 0.08))
+    ask_jump_pct = float(pump_cfg.get("ask_jump_pct", 0.10))
+    breakout_n = int(pump_cfg.get("breakout_points", 6))
+    breakout_eps = float(pump_cfg.get("breakout_extra_pct", 0.03))
+    momentum_mult = float(pump_cfg.get("momentum_mult", 1.8))
+    confirm_price = float(pump_cfg.get("confirm_price_pct", 0.04))
+    pump_cd_min = int(pump_cfg.get("cooldown_minutes", 60))
+
+    # Сеть/антибан
+    req_cfg = cfg.get("request", {}) or {}
+    throttler = Throttler(
+        base_delay=float(req_cfg.get("base_delay_sec", 2.5)),
+        jitter=float(req_cfg.get("jitter_sec", 0.5)),
+    )
+    retries = int(req_cfg.get("retries", 5))
+    backoff = float(req_cfg.get("backoff_factor", 1.8))
+    shuffle_items = bool(req_cfg.get("shuffle", True))
+
+    # Область мониторинга
+    items = build_market_names(cfg)
+    if shuffle_items:
+        random.Random().shuffle(items)
+
+    state = load_state()
+    now = datetime.now(timezone.utc)
+    now_iso = now.replace(microsecond=0).isoformat()
+
+    # Отчёт/сигналы
+    report = []
+    report.append(f"Монитор Austin 2025 | {now.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    report.append(f"позиций: {len(items)} | min_sales/24ч: {min_sales}")
+    report.append("")
+
+    price_signals = []   # (severity, name, cur, base, disc%)
+    vol_signals = []     # (name, now24h, base24h, ratio)
+    combo_signals = []   # (name, details)
+    pump_signals = []    # (name, details)
+
+    changed_entries = []  # для старых Δ-сигналов (если включено)
+    buy_list, sell_list = [], []
+    notes = []
+
+    for it in items:
+        key = it["key"]
+        name = it["name"]
+
+        try:
+            # ── запрос к Steam
+            d = fetch_priceoverview(name, ccy, throttler, retries=retries, backoff=backoff)
+            if not d.get("success"):
+                notes.append(f"[WARN] {name}: success=false")
+                continue
+
+            median = rub_str_to_float(d.get("median_price"))
+            ask = rub_str_to_float(d.get("lowest_price"))
+            volume_str = (d.get("volume") or "0").replace(",", "")
+            m = re.findall(r"\d+", volume_str)
+            sales24h = int(m[0]) if m else 0
+            if sales24h < min_sales:
+                continue
+
+            # ── состояние
+            rec = state.get(key, {"last": None, "history": [], "last_alert_ts": None, "last_alerts": {}})
+            last = rec.get("last")
+            last_median = last.get("median") if last else None
+            last_sales = last.get("sales24h") if last else None
+            last_ts_iso = last.get("ts") if last else None
+
+            # прошло минут с прошлого замера
+            dt_minutes = None
+            if last_ts_iso:
+                try:
+                    dt_minutes = (now - datetime.fromisoformat(last_ts_iso.replace("Z", "+00:00"))).total_seconds() / 60.0
+                except Exception:
+                    dt_minutes = None
+
+            sold_since = estimate_new_sales(last_sales, sales24h, dt_minutes)
+
+            # ── БАЗЫ ИЗ ПРОШЛОЙ ИСТОРИИ (до текущей точки)
+            hist_before = rec.get("history", [])
+            tmp_rec = {"history": hist_before}
+
+            base_median, base_sales, used_days, hist_len = baselines_from_history(
+                tmp_rec, now, min_points=min(p_min_pts, v_min_pts)
+            )
+            short_meds, _ = short_window(hist_before, now, short_minutes, "median")
+            short_sales_vals, _ = short_window(hist_before, now, short_minutes, "sales24h")
+            short_base_med = robust_median(short_meds)
+            short_base_sales = robust_mean(short_sales_vals)
+            base_hourly = (base_sales / 24.0) if base_sales else None
+
+            # ── строка отчёта
+            line = (
+                f"{name}\n  медиана: {('%.2f ₽' % median) if median is not None else '—'}"
+                f" | мин. листинг: {('%.2f ₽' % ask) if ask is not None else '—'}"
+                f" | продажи24ч: {sales24h}"
+            )
+            if base_median is not None:
+                line += f" | 7д медиана≈ {base_median:.2f} ₽"
+            if base_sales is not None:
+                line += f" | 7д ср. продажи≈ {base_sales:.1f}"
+            if short_base_med is not None:
+                line += f" | short≈ {short_base_med:.2f} ₽/{short_minutes}м"
+            if sold_since is not None:
+                line += f" | продано с прошлого запуска: {sold_since} (оц.)"
+            report.append(line)
+            report.append("")
+
+            # ── долгие сигналы (к 7д базам)
+            severity = None
+            discount_pct = None
+            if (median is not None) and (base_median is not None) and len(hist_before) >= p_min_pts:
+                discount_pct = (1 - (median / base_median)) * 100.0
+                if median <= base_median * deep_pct:
+                    severity = "deep"
+                elif median <= base_median * soft_pct:
+                    severity = "soft"
+                if severity:
+                    price_signals.append((severity, name, median, base_median, discount_pct))
+
+            if (base_sales is not None) and (base_sales > 0) and len(hist_before) >= v_min_pts:
+                ratio = sales24h / base_sales
+                if ratio >= spike_mult:
+                    vol_signals.append((name, sales24h, base_sales, ratio))
+
+            # ── комбо (цена+объём) c простым cooldown
+            if severity and (base_sales is not None) and (base_sales > 0) and len(hist_before) >= max(p_min_pts, v_min_pts):
+                ratio = sales24h / base_sales
+                if ratio >= spike_mult:
+                    last_alerts = rec.get("last_alerts", {})
+                    last_combo_iso = last_alerts.get("combo")
+                    in_cd = False
+                    if last_combo_iso:
+                        try:
+                            last_dt = datetime.fromisoformat(last_combo_iso.replace("Z", "+00:00"))
+                            in_cd = (now - last_dt) < timedelta(hours=combo_cd_h)
+                        except Exception:
+                            in_cd = False
+                    if not in_cd:
+                        combo_signals.append((name, f"цена {severity} (−{abs(discount_pct):.1f}%) + объём ×{ratio:.2f} к 7д"))
+                        last_alerts["combo"] = now_iso
+                        rec["last_alerts"] = last_alerts
+
+            # ── памп-сигналы (короткое окно)
+            if (median is not None) and (short_base_med is not None) and len(short_meds) >= pump_min_pts:
+                if median >= short_base_med * (1 + price_jump_pct):
+                    pump_signals.append(
+                        (name, f"PRICE-JUMP: {median:.2f} ₽ vs short {short_base_med:.2f} ₽ (+{(median/short_base_med-1)*100:.1f}%)")
+                    )
+
+            if (ask is not None) and (short_base_med is not None) and len(short_meds) >= pump_min_pts:
+                if ask >= short_base_med * (1 + ask_jump_pct):
+                    pump_signals.append(
+                        (name, f"ASK-JUMP: ask {ask:.2f} ₽ vs short {short_base_med:.2f} ₽ (+{(ask/short_base_med-1)*100:.1f}%)")
+                    )
+
+            if (median is not None) and len(short_meds) >= max(pump_min_pts, breakout_n):
+                local_max = max(short_meds[-breakout_n:]) if breakout_n <= len(short_meds) else max(short_meds)
+                if median >= local_max * (1 + breakout_eps):
+                    pump_signals.append(
+                        (name, f"BREAKOUT: {median:.2f} ₽ > лок.макс {local_max:.2f} ₽ (+{(median/local_max-1)*100:.1f}%)")
+                    )
+
+            if (base_hourly is not None) and (base_hourly > 0) and (sold_since is not None) and (dt_minutes is not None) and (dt_minutes > 0) and (last_median is not None):
+                cur_hourly = sold_since / (dt_minutes / 60.0)
+                if (cur_hourly >= base_hourly * momentum_mult) and (median is not None) and (median >= last_median * (1 + confirm_price)):
+                    pump_signals.append(
+                        (name, f"MOMENTUM: {cur_hourly:.1f}/ч vs {base_hourly:.1f}/ч (×{cur_hourly/max(base_hourly,1e-9):.2f}); цена +{(median/last_median-1)*100:.1f}%")
+                    )
+
+            # ── добавляем текущий замер в историю
+            hist_after = hist_before + [{"ts": now_iso, "median": median, "sales24h": sales24h}]
+            cutoff = now - timedelta(days=60)
+            rec["history"] = [p for p in hist_after if datetime.fromisoformat(p["ts"].replace("Z", "+00:00")) >= cutoff]
+            rec["last"] = {"median": median, "ask": ask, "sales24h": sales24h, "ts": now_iso}
+            state[key] = rec
+
+        except Exception as e:
+            notes.append(f"[ERROR] {name}: {e!r}")
+
+    save_state(state)
+
+    # ───────────────────────── Формирование отчёта ─────────────────────────
+    report.append("—" * 40)
+
+    if price_signals:
+        report.append("СИГНАЛЫ ЦЕНЫ (к 7д медиане):")
+        for sev, nm, cur, base, disc in sorted(price_signals, key=lambda x: (x[0] != "deep", x[4])):
+            tag = "ГЛУБОКИЙ" if sev == "deep" else "МЯГКИЙ"
+            report.append(f"[{tag}] {nm}\n  было≈{base:.2f} ₽ → сейчас {cur:.2f} ₽ (-{abs(disc):.1f}%)\n")
+    else:
+        report.append("Нет ценовых сигналов к 7д медиане.")
+    report.append("")
+
+    if vol_signals:
+        report.append("СИГНАЛЫ ОБЪЁМА (к 7д среднему):")
+        for nm, now_s, base_s, ratio in sorted(vol_signals, key=lambda x: x[3], reverse=True):
+            report.append(f"{nm}\n  продажи24ч: {now_s} vs 7д ср.: {base_s:.1f} (×{ratio:.2f})\n")
+    else:
+        report.append("Нет объёмных сигналов.")
+    report.append("")
+
+    if combo_signals:
+        report.append("КОМБО (долгие цена+объём):")
+        for nm, details in combo_signals:
+            report.append(f"{nm}\n  {details}\n")
+    else:
+        report.append("Комбо-сигналов нет.")
+    report.append("")
+
+    if pump_signals:
+        report.append("⚡ ПАМП-СИГНАЛЫ (короткое окно):")
+        for nm, details in pump_signals:
+            report.append(f"{nm}\n  {details}\n")
+    else:
+        report.append("Нет памп-сигналов по короткому окну.")
+    report.append("")
+
+    if enable_change:
+        if changed_entries:
+            report.append("ИЗМЕНЕНИЯ ≥ порога:")
+            changed_entries.sort(key=lambda x: x[0], reverse=True)
+            for _, txt, _ in changed_entries:
+                report.append(txt)
+                report.append("")
+        else:
+            report.append("Нет изменений ≥ порога за интервал.")
+            report.append("")
+
+    if notes:
+        report.append("ЗАМЕТКИ:")
+        report.extend(notes)
+        report.append("")
+
+    report.append(f"as_of: {now.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    full_report = "\n".join(report)
+
+    # Локально (для артефактов)
+    fname = f"cs2_austin_report_{now.strftime('%Y%m%d_%H%M%S')}Z.txt"
+    try:
+        with open(fname, "w", encoding="utf-8") as f:
+            f.write(full_report)
+    except Exception as e:
+        print("Cannot write report file:", e)
+
+    # Короткое резюме
+    header = "📊 Austin 2025 — сигналы"
+    ts = now.strftime("%Y-%m-%d %H:%M:%S UTC")
+    lines = [
+        header,
+        f"Цена (к 7д): {len(price_signals)}",
+        f"Объёмные: {len(vol_signals)}",
+        f"Комбо: {len(combo_signals)}",
+        f"Памп (short): {len(pump_signals)}",
+    ]
+    if enable_change:
+        lines.append(f"Δ за интервал: {len(changed_entries)}")
+    lines.append(f"<i>{ts}</i>")
+    send_telegram("\n".join(lines))
+
+    # Полный отчёт файлом (+ фолбэк кусками)
+    ok = send_document(full_report, filename=fname, caption="Полный отчёт (txt)")
+    if not ok:
+        limit = 3500
+        for i in range(0, len(full_report), limit):
+            chunk = full_report[i : i + limit]
+            send_telegram("<code>" + chunk + "</code>")
+
+
+if __name__ == "__main__":
+    main()
