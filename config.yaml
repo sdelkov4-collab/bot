@@ -63,7 +63,7 @@ scope:
       - "JamYoung"
       - "Jee"
       - "z4kr"
-    variants: ["paper","holo","gold"]
+    variants: ["paper","holo","foil"]
 
 aliases:
   players:
