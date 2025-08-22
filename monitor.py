@@ -419,21 +419,27 @@ def main():
             report.append(line)
             report.append("")
 
-                       # ───── КОМБО (долгие цена+объём) ─────
+            # ───── КОМБО (долгие цена+объём) ─────
             if severity and (base_sales is not None) and (base_sales > 0) and len(hist_before) >= max(p_min_pts, v_min_pts):
                 ratio = sales24h / base_sales
                 if ratio >= spike_mult:
-                    last_alerts = rec.get("last_alerts", {})
-                    last_combo_iso = last_alerts.get("combo")
-                    in_cd = False
-                    if last_combo_iso:
-                        try:
-                            in_cd = (now - datetime.fromisoformat(last_combo_iso.replace("Z", "+00:00"))) < timedelta(hours=combo_cd_h)
-                        except Exception:
-                            in_cd = False
-                    if not in_cd:
-                        combo_signals.append(
-                            (name, f"цена {severity} (−{abs(discount_pct):.1f}%) + объём ×{ratio:.2f} к 7д")
-                        )
-                        last_alerts["combo"] = now_iso
-                        rec["last_alerts"] = last_alerts
+                    # BEGIN COMBO PATCH
+                    try:
+                        last_alerts = rec.get("last_alerts", {})
+                        last_combo_iso = last_alerts.get("combo")
+                        in_cd = False
+                        if last_combo_iso:
+                            last_dt = datetime.fromisoformat(last_combo_iso.replace("Z", "+00:00"))
+                            in_cd = (now - last_dt) < timedelta(hours=combo_cd_h)
+
+                        if not in_cd:
+                            combo_signals.append(
+                                (name, f"цена {severity} (−{abs(discount_pct):.1f}%) + объём ×{ratio:.2f} к 7д")
+                            )
+                            last_alerts["combo"] = now_iso
+                            rec["last_alerts"] = last_alerts
+                    except Exception as err:
+                        # Не роняем весь прогон из-за одного сбоя
+                        notes.append(f"[COMBO ERROR] {name}: {err!r}")
+                    # END COMBO PATCH
+
