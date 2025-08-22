@@ -278,27 +278,34 @@ def main():
 
             sold_since = estimate_new_sales(last_sales, sales24h, dt_minutes)
 
-            # обновляем историю
-            hist = rec.get("history", [])
-            hist.append({"ts": now_iso, "median": median, "sales24h": sales24h})
-            cutoff = now - timedelta(days=60)
-            rec["history"] = [p for p in hist if datetime.fromisoformat(p["ts"].replace("Z","+00:00")) >= cutoff]
+            # история ДО текущего замера
+hist_before = rec.get("history", [])
 
-            # Базы
-            base_median, base_sales, used_days, hist_len = baselines_from_history(rec, now, min_points=min(p_min_pts, v_min_pts))
-            short_meds, short_ts = short_window(rec["history"], now, short_minutes, "median")
-            short_sales, _ = short_window(rec["history"], now, short_minutes, "sales24h")
-            short_base_med = robust_median(short_meds)
-            short_base_sales = robust_mean(short_sales)
-            base_hourly = (base_sales/24.0) if base_sales else None
+# Базы (по прошлым точкам)
+tmp_rec = {"history": hist_before}
+base_median, base_sales, used_days, hist_len = baselines_from_history(tmp_rec, now, min_points=min(p_min_pts, v_min_pts))
+short_meds, short_ts = short_window(hist_before, now, short_minutes, "median")
+short_sales, _ = short_window(hist_before, now, short_minutes, "sales24h")
+short_base_med = robust_median(short_meds)
+short_base_sales = robust_mean(short_sales)
+base_hourly = (base_sales/24.0) if base_sales else None
+
+# теперь добавляем ТЕКУЩИЙ замер в историю и обрезаем
+hist_after = hist_before + [{"ts": now_iso, "median": median, "sales24h": sales24h}]
+cutoff = now - timedelta(days=60)
+rec["history"] = [p for p in hist_after if datetime.fromisoformat(p["ts"].replace("Z","+00:00")) >= cutoff]
+
 
             # Строка для отчёта
             line = f"{name}\n  медиана: {('%.2f ₽' % median) if median else '—'} | мин. листинг: {('%.2f ₽' % ask) if ask else '—'} | продажи24ч: {sales24h}"
-            if base_median: line += f" | 7д медиана≈ {base_median:.2f} ₽"
-            if base_sales:  line += f" | 7д ср. продажи≈ {base_sales:.0f}"
-            if short_base_med: line += f" | short≈ {short_base_med:.2f} ₽/{short_minutes}м"
-            if sold_since is not None: line += f" | продано с прошлого запуска: {sold_since} (оц.)"
-            report.append(line); report.append("")
+if base_median is not None:
+    line += f" | 7д медиана≈ {base_median:.2f} ₽"
+if base_sales is not None:
+    line += f" | 7д ср. продажи≈ {base_sales:.1f}"
+if short_base_med is not None:
+    line += f" | short≈ {short_base_med:.2f} ₽/{short_minutes}м"
+if sold_since is not None:
+    line += f" | продано с прошлого запуска: {sold_since} (оц.)"
 
             # ── Долгие сигналы к 7д базам ─────────────────────────────────────
             severity = None; discount_pct = None
