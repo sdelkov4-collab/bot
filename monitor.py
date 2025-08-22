@@ -381,24 +381,26 @@ def main():
             last_median = last.get("median") if last else None
             last_sales = last.get("sales24h") if last else None
             last_ts_iso = last.get("ts") if last else None
-            last_ask = last.get("ask") if last else None
+            last_ask = last.get("ask") if last else None  # прошлый ask
 
-            # прошло минут с прошлого замера
+            # прошло минут с прошлого замера (аккуратный try/except + расчёт вне try)
             dt_minutes = None
             if last_ts_iso:
                 try:
-                    dt_minutes = (now - datetime.fromisoformat(last_ts_iso.replace("Z", "+00:00"))).total_seconds() / 60.0
+                    last_dt = datetime.fromisoformat(last_ts_iso.replace("Z", "+00:00"))
                 except Exception:
-                    dt_minutes = None
+                    last_dt = None
+                if last_dt is not None:
+                    dt_minutes = (now - last_dt).total_seconds() / 60.0
 
             sold_since = estimate_new_sales(last_sales, sales24h, dt_minutes)
-# Δ минимального листинга (ask) к прошлому замеру
-ask_change_pct = None
-ask_change_abs = None
-if (ask is not None) and (last_ask is not None) and (last_ask > 0):
-    ask_change_pct = (ask / last_ask - 1.0) * 100.0
-    ask_change_abs = ask - last_ask
 
+            # Δ минимального листинга (ask) к прошлому замеру
+            ask_change_pct = None
+            ask_change_abs = None
+            if (ask is not None) and (last_ask is not None) and (last_ask > 0):
+                ask_change_pct = (ask / last_ask - 1.0) * 100.0
+                ask_change_abs = ask - last_ask
 
             # ── БАЗЫ ИЗ ПРОШЛОЙ ИСТОРИИ (до текущей точки)
             hist_before = rec.get("history", [])
