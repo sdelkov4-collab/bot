@@ -429,8 +429,8 @@ def main():
                 line += f" | short≈ {short_base_med:.2f} ₽/{short_minutes}м"
             if sold_since is not None:
                 line += f" | продано с прошлого запуска: {sold_since} (оц.)"
-                if ask_change_pct is not None:
-    line += f" | Δ ask к прошл.: {ask_change_pct:+.1f}% ({ask_change_abs:+.2f} ₽)"
+            if ask_change_pct is not None:
+                line += f" | Δ ask к прошл.: {ask_change_pct:+.1f}% ({ask_change_abs:+.2f} ₽)"
 
             report.append(line)
             report.append("")
