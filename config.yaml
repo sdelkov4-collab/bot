@@ -1,30 +1,39 @@
 # === БАЗА ===
-currency_code: 5        # 5 = RUB
-steam_fee_pct: 15       # на будущее (в текущих сигналах не используется, но пусть будет)
-
-# Минимальная ликвидность (фильтр на продажах за 24ч)
+currency_code: 5
+steam_fee_pct: 15
 min_daily_sales: 1
 
-# Включать ли старый сигнал "изменение за интервал" (лучше оставить false — теперь у нас умные сигналы)
+# Старые алерты "Δ за интервал" — можно оставить выключенными
 enable_change_alerts: false
-change_percent_threshold: 10   # если включите старые сигналы
-cooldown_hours: 6              # анти-спам для старых сигналов
+change_percent_threshold: 10
+cooldown_hours: 6
 
-# === СИГНАЛЫ (НОВЫЕ) ===
+# === ДОЛГИЕ СИГНАЛЫ (как было) ===
 signals:
-  # Сигнал цены: текущая медиана ниже 7-дневной
   price_from_7d_median:
-    soft_pct: 0.90     # "мягкий дип": цена ≤ 90% от 7д медианы
-    deep_pct: 0.85     # "глубокий дип": цена ≤ 85% от 7д медианы
-    min_points: 12     # мин. кол-во точек в окне (для надёжности бэйзлайна)
-
-  # Сигнал объёма: продажи24ч кратно выше 7-дневного среднего
-  volume_spike:
-    spike_multiplier: 1.5  # всплеск > +50% к 7д среднему
+    soft_pct: 0.90
+    deep_pct: 0.85
     min_points: 12
 
-  # Анти-спам для "комбо" (цена+объём)
+  volume_spike:
+    spike_multiplier: 1.5
+    min_points: 12
+
   combo_cooldown_hours: 6
+
+  # === НОВОЕ: ПАМП-КОНТРОЛЬ (короткое окно) ===
+  pump:
+    short_window_minutes: 120   # окно для быстрой базы (90–120 мин самое то)
+    min_points: 4               # мин. число точек в коротком окне
+
+    price_jump_pct: 0.08        # медиана ≥ база_short × (1 + 8%) → джамп
+    ask_jump_pct:   0.10        # ask    ≥ база_short × (1 + 10%) → джамп
+    breakout_points: 6          # новая вершина vs последние N точек
+    breakout_extra_pct: 0.03    # запас к локальному максимуму (3%)
+
+    momentum_mult: 1.8          # текущий темп продаж ≥ base_hourly × 1.8
+    confirm_price_pct: 0.04     # +4% к предыдущей медиане — для подтверждения момента
+    cooldown_minutes: 60        # антиспам для "pump" (мин.)
 
 # === ОБЛАСТЬ МОНИТОРИНГА ===
 scope:
@@ -41,7 +50,7 @@ scope:
       - "FlyQuest"
       - "OG"
       - "Falcons"
-    variants: ["paper","holo","foil"]   # для команд
+    variants: ["paper","holo","foil"]
   players:
     include:
       - "m0NESY"
@@ -54,9 +63,8 @@ scope:
       - "JamYoung"
       - "Jee"
       - "z4kr"
-    variants: ["paper","holo","foil"]   # для игроков
+    variants: ["paper","holo","gold"]
 
-# Алиасы на случай опечаток (используются при генерации имён предметов)
 aliases:
   players:
     monesy: "m0NESY"
@@ -67,8 +75,8 @@ aliases:
 
 # === СЕТЕВЫЕ НАСТРОЙКИ / АНТИ-БАН ===
 request:
-  base_delay_sec: 2.5     # базовая пауза между запросами к Steam
-  jitter_sec: 0.5         # случайная добавка к паузе (рассинхронизация)
-  retries: 5              # число повторов на 429/5xx
-  backoff_factor: 1.8     # экспоненциальный рост задержки между ретраями
-  shuffle: true           # перемешивать порядок предметов, чтобы "хвост" не страдал
+  base_delay_sec: 2.5
+  jitter_sec: 0.5
+  retries: 5
+  backoff_factor: 1.8
+  shuffle: true
