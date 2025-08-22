@@ -1,27 +1,62 @@
-# Валюта и комиссия
-currency_code: 5       # 5 = RUB
-steam_fee_pct: 15
+# === БАЗА ===
+currency_code: 5        # 5 = RUB
+steam_fee_pct: 15       # на будущее (в текущих сигналах не используется, но пусть будет)
 
-# Фильтр по продажам за ~24ч (листинги недоступны бесплатно)
+# Минимальная ликвидность (фильтр на продажах за 24ч)
 min_daily_sales: 1
 
-# Порог для алерта изменения цены (медианы) между измерениями, % (в обе стороны)
-change_percent_threshold: 10
+# Включать ли старый сигнал "изменение за интервал" (лучше оставить false — теперь у нас умные сигналы)
+enable_change_alerts: false
+change_percent_threshold: 10   # если включите старые сигналы
+cooldown_hours: 6              # анти-спам для старых сигналов
 
-# Анти-спам: не присылать повторный алерт по той же метке и предмету раньше, чем через N часов
-cooldown_hours: 6
+# === СИГНАЛЫ (НОВЫЕ) ===
+signals:
+  # Сигнал цены: текущая медиана ниже 7-дневной
+  price_from_7d_median:
+    soft_pct: 0.90     # "мягкий дип": цена ≤ 90% от 7д медианы
+    deep_pct: 0.85     # "глубокий дип": цена ≤ 85% от 7д медианы
+    min_points: 12     # мин. кол-во точек в окне (для надёжности бэйзлайна)
 
-# Выбор события/наборов (исправил "Sprit" -> Team Spirit)
+  # Сигнал объёма: продажи24ч кратно выше 7-дневного среднего
+  volume_spike:
+    spike_multiplier: 1.5  # всплеск > +50% к 7д среднему
+    min_points: 12
+
+  # Анти-спам для "комбо" (цена+объём)
+  combo_cooldown_hours: 6
+
+# === ОБЛАСТЬ МОНИТОРИНГА ===
 scope:
   event: "Austin 2025"
   teams:
-    include: ["Team Spirit","Team Liquid","TYLOO","Lynn Vision","Aurora","MOUZ","Complexity","FlyQuest","OG","Falcons"]
-    variants: ["paper","holo","foil"]     # для команд
+    include:
+      - "Team Spirit"
+      - "Team Liquid"
+      - "TYLOO"
+      - "Lynn Vision"
+      - "Aurora"
+      - "MOUZ"
+      - "Complexity"
+      - "FlyQuest"
+      - "OG"
+      - "Falcons"
+    variants: ["paper","holo","foil"]   # для команд
   players:
-    include: ["m0NESY","donk","NiKo","Lucky","exit","zont1x","ropz","JamYoung","Jee","z4kr"]
-    variants: ["paper","holo","foil"]     # для игроков
+    include:
+      - "m0NESY"
+      - "donk"
+      - "NiKo"
+      - "Lucky"
+      - "exit"
+      - "zont1x"
+      - "ropz"
+      - "JamYoung"
+      - "Jee"
+      - "z4kr"
+    variants: ["paper","holo","foil"]   # для игроков
 
-# Алиасы (на случай опечаток)
+# Алиасы на случай опечаток (используются при генерации имён предметов)
 aliases:
   players:
     monesy: "m0NESY"
@@ -29,3 +64,11 @@ aliases:
     zontix: "zont1x"
     jamyoung: "JamYoung"
     jee: "Jee"
+
+# === СЕТЕВЫЕ НАСТРОЙКИ / АНТИ-БАН ===
+request:
+  base_delay_sec: 2.5     # базовая пауза между запросами к Steam
+  jitter_sec: 0.5         # случайная добавка к паузе (рассинхронизация)
+  retries: 5              # число повторов на 429/5xx
+  backoff_factor: 1.8     # экспоненциальный рост задержки между ретраями
+  shuffle: true           # перемешивать порядок предметов, чтобы "хвост" не страдал
